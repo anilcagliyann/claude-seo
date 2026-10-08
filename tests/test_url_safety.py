@@ -1134,3 +1134,18 @@ def test_pin_dns_lets_a_dns_named_exempt_proxy_resolve_to_public() -> None:
             "pinned.example", "8.8.8.8", 443, exempt_hosts=frozenset({"proxy.example"})
         ):
             assert socket.getaddrinfo("proxy.example", 3128)[0][4][0] == "93.184.216.34"
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+def test_loopback_proxy_refused_without_opt_in(host, monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDE_SEO_ALLOW_LOOPBACK_PROXY", raising=False)
+    with pytest.raises(url_safety.URLSafetyError):
+        url_safety._assert_proxy_host_is_public(host)
+
+
+def test_loopback_proxy_allowed_only_with_opt_in(monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDE_SEO_ALLOW_LOOPBACK_PROXY", "1")
+    assert url_safety._assert_proxy_host_is_public("127.0.0.1") == "127.0.0.1"
+    for host in ("169.254.169.254", "10.0.0.1", "192.168.1.1", "localhost"):
+        with pytest.raises(url_safety.URLSafetyError):
+            url_safety._assert_proxy_host_is_public(host)
