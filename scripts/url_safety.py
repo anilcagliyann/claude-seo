@@ -578,6 +578,15 @@ def _assert_proxy_host_is_public(host: str) -> str:
         "Point the proxy environment variable at a publicly routable "
         "address, or unset it."
     )
+    # Sandboxed hosts (e.g. Claude Code on the web) route all egress through
+    # a local CONNECT proxy. Trust it only on explicit opt-in and only as a
+    # loopback IP literal, so metadata and LAN proxies stay refused.
+    if os.environ.get("CLAUDE_SEO_ALLOW_LOOPBACK_PROXY") == "1":
+        try:
+            if ipaddress.ip_address(normalized).is_loopback:
+                return normalized
+        except ValueError:
+            pass
     if normalized in _BLOCKED_HOSTNAMES:
         raise URLSafetyError(
             f"Refusing configured HTTP proxy {host!r}: blocked hostname "

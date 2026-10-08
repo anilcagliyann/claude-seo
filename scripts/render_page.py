@@ -507,7 +507,11 @@ def render_page(
 
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(
+                    headless=True,
+                    # Prebuilt Chromium override (e.g. cloud sandboxes that block downloads).
+                    executable_path=os.environ.get("CLAUDE_SEO_CHROMIUM_PATH") or None,
+                )
                 context = browser.new_context(
                     viewport={"width": vp["width"], "height": vp["height"]},
                     device_scale_factor=vp["device_scale"],
