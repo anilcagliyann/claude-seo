@@ -25,6 +25,29 @@ if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
     fi
 fi
 
+# Google APIs (Search Console, GA4, Indexing): cloud environments hold secrets
+# as variables, so materialize the service account key (raw or base64 JSON).
+if [ -n "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" ]; then
+    sa_file="${HOME}/.config/claude-seo/service_account.json"
+    mkdir -p "$(dirname "${sa_file}")"
+    (
+        umask 077
+        if printf '%s' "${GOOGLE_SERVICE_ACCOUNT_JSON}" | grep -q '^[[:space:]]*{'; then
+            printf '%s' "${GOOGLE_SERVICE_ACCOUNT_JSON}" > "${sa_file}"
+        else
+            printf '%s' "${GOOGLE_SERVICE_ACCOUNT_JSON}" | base64 -d > "${sa_file}"
+        fi
+    )
+    if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+        echo "export GOOGLE_APPLICATION_CREDENTIALS=\"${sa_file}\"" >> "${CLAUDE_ENV_FILE}"
+    fi
+fi
+# httplib2 and gRPC ignore REQUESTS_CA_BUNDLE; point them at the sandbox proxy CA.
+if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${SSL_CERT_FILE:-}" ]; then
+    echo "export HTTPLIB2_CA_CERTS=\"${SSL_CERT_FILE}\"" >> "${CLAUDE_ENV_FILE}"
+    echo "export GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=\"${SSL_CERT_FILE}\"" >> "${CLAUDE_ENV_FILE}"
+fi
+
 launcher="${CLAUDE_PROJECT_DIR:-$(pwd)}/scripts/claude-seo"
 if CLAUDE_SEO_DATA_DIR="${data_dir}" "${launcher}" doctor --json 2>/dev/null | grep -q '"ready": true'; then
     exit 0
