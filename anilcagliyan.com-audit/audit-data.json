@@ -1,0 +1,288 @@
+{
+  "summary": {
+    "health_score": 63,
+    "business_type": "Personal-brand SEO consultant + blog (agency/publisher hybrid)",
+    "top_findings": [
+      "Undisclosed paid posts with followed links (incl. YMYL health advertorial) promoted site-wide",
+      "No About/Contact/KVKK/service pages",
+      "Homepage page-type mismatch for 'seo uzmanı/danışmanı'",
+      "Thin and cannibalizing content (57/105 posts <500 words)",
+      "Unverifiable entity: sameAs self-only, duplicate schema entities"
+    ],
+    "quick_wins": [
+      "rel=sponsored on /tanitim/ links; remove implant post from ticker",
+      "Validate/remove Jannah license bar",
+      "Fill Person sameAs/jobTitle/knowsAbout",
+      "Replace favicon OG image with 1200x630",
+      "Enable full-page caching"
+    ]
+  },
+  "categories": [
+    {
+      "name": "Technical SEO",
+      "score": 82,
+      "what_works": [
+        "Single-hop redirects",
+        "All 114 sitemap URLs 200/indexable/self-canonical",
+        "Real 404s"
+      ],
+      "findings": [
+        {
+          "title": "TTFB ~1s, no HTML caching",
+          "severity": "Medium",
+          "description": "0.94-1.25s TTFB, no Cache-Control",
+          "recommendation": "Page/edge caching"
+        },
+        {
+          "title": "Weak security headers",
+          "severity": "Medium",
+          "description": "HSTS no includeSubDomains; CSP only upgrade-insecure-requests",
+          "recommendation": "Add includeSubDomains + CSP"
+        },
+        {
+          "title": "No IndexNow",
+          "severity": "Medium",
+          "description": "/indexnow key absent",
+          "recommendation": "Enable IndexNow"
+        }
+      ]
+    },
+    {
+      "name": "Content Quality",
+      "score": 42,
+      "what_works": [
+        "Readability acceptable",
+        "No templated metadata"
+      ],
+      "findings": [
+        {
+          "title": "Undisclosed sponsored posts",
+          "severity": "Critical",
+          "description": "/tanitim/ posts link to commercial sites without rel=sponsored; implant advertorial in site-wide ticker",
+          "recommendation": "rel=sponsored + disclosure; drop YMYL advertorials"
+        },
+        {
+          "title": "No About/Contact/KVKK/service pages",
+          "severity": "High",
+          "description": "All 404; page-sitemap has homepage only",
+          "recommendation": "Create pages"
+        },
+        {
+          "title": "Thin content",
+          "severity": "High",
+          "description": "57/105 posts <500 words",
+          "recommendation": "Expand or prune"
+        },
+        {
+          "title": "Cannibalization",
+          "severity": "High",
+          "description": "7+ overlapping post groups",
+          "recommendation": "Merge with 301s"
+        },
+        {
+          "title": "Bulk lastmod, no visible dates/byline",
+          "severity": "Medium",
+          "description": "79 posts lastmod 2024-12-15",
+          "recommendation": "Show dates; stop bulk re-saves"
+        }
+      ]
+    },
+    {
+      "name": "On-Page SEO",
+      "score": 74,
+      "what_works": [
+        "No duplicate titles/descriptions across 105 posts",
+        "One H1 per post"
+      ],
+      "findings": [
+        {
+          "title": "Homepage is a blog index",
+          "severity": "High",
+          "description": "Bare-name H1, 22 repeated H2s, ~120 words",
+          "recommendation": "Service hub homepage"
+        },
+        {
+          "title": "Missing/over-length metadata",
+          "severity": "Medium",
+          "description": "1 missing description, 10 desc >160, 5 titles >60",
+          "recommendation": "Rewrite"
+        },
+        {
+          "title": "Thin category archives",
+          "severity": "Medium",
+          "description": "/tanitim/ ~314 words, default title",
+          "recommendation": "Unique intros or noindex"
+        }
+      ]
+    },
+    {
+      "name": "Schema / Structured Data",
+      "score": 52,
+      "what_works": [
+        "Valid Yoast graph",
+        "No deprecated types"
+      ],
+      "findings": [
+        {
+          "title": "sameAs self-only",
+          "severity": "High",
+          "description": "Person sameAs lists only own URL",
+          "recommendation": "Add verified profiles"
+        },
+        {
+          "title": "Duplicate entities on posts",
+          "severity": "High",
+          "description": "Yoast Person+Org and separate BlogPosting block with relative #Publisher",
+          "recommendation": "Enable Yoast Article; remove second source"
+        },
+        {
+          "title": "http schema context",
+          "severity": "High",
+          "description": "BlogPosting uses http://schema.org",
+          "recommendation": "Use https"
+        },
+        {
+          "title": "No ProfessionalService",
+          "severity": "Medium",
+          "description": "No service entity",
+          "recommendation": "Add ProfessionalService"
+        },
+        {
+          "title": "Invalid FAQPage",
+          "severity": "Medium",
+          "description": "/ornek-robots-txt-kodlari/ raw newlines",
+          "recommendation": "Fix or remove (no SERP benefit since 2026-05-07)"
+        }
+      ]
+    },
+    {
+      "name": "Performance (CWV)",
+      "score": 58,
+      "what_works": [
+        "Brotli, HTTP/2, Speculation Rules, bfcache OK"
+      ],
+      "findings": [
+        {
+          "title": "Render-blocking head",
+          "severity": "High",
+          "description": "8-13 sync scripts, 8-10 blocking CSS",
+          "recommendation": "Defer JS, trim CSS"
+        },
+        {
+          "title": "Field data unavailable",
+          "severity": "Info",
+          "description": "PSI keyless 429; CWV unmeasured",
+          "recommendation": "Add Google API key"
+        }
+      ]
+    },
+    {
+      "name": "AI Search Readiness",
+      "score": 62,
+      "what_works": [
+        "All AI crawlers allowed",
+        "Server-rendered",
+        "Question headings + direct definitions"
+      ],
+      "findings": [
+        {
+          "title": "Weak brand/entity authority",
+          "severity": "High",
+          "description": "No Wikidata/Wikipedia, no linked LinkedIn/YouTube, no homepage bio",
+          "recommendation": "Build entity hub + off-site presence"
+        },
+        {
+          "title": "Theme license notice in HTML",
+          "severity": "Medium",
+          "description": "'Jannah Theme License is not validated' on every page",
+          "recommendation": "Validate license"
+        },
+        {
+          "title": "No llms.txt / Markdown delivery",
+          "severity": "Low",
+          "description": "404",
+          "recommendation": "Optional"
+        }
+      ]
+    },
+    {
+      "name": "Images",
+      "score": 66,
+      "what_works": [
+        "Most images have dimensions",
+        "Post hero has fetchpriority"
+      ],
+      "findings": [
+        {
+          "title": "Favicon used as homepage OG image",
+          "severity": "High",
+          "description": "512x512 PNG; no twitter:image",
+          "recommendation": "1200x630 card"
+        },
+        {
+          "title": "No CTA above fold",
+          "severity": "High",
+          "description": "Only WhatsApp bubble",
+          "recommendation": "Add primary CTA"
+        },
+        {
+          "title": "Alt/lazy/format gaps",
+          "severity": "Medium",
+          "description": "Empty alts, 17 eager images, no WebP/AVIF",
+          "recommendation": "Fix"
+        }
+      ]
+    }
+  ],
+  "action_plan": {
+    "phases": [
+      {
+        "name": "Phase 1: Critical Fixes",
+        "timeframe": "Week 1",
+        "items": [
+          "rel=sponsored + disclosure on /tanitim/, remove implant post from ticker",
+          "Validate/remove Jannah license bar"
+        ]
+      },
+      {
+        "name": "Phase 2: High-Impact Improvements",
+        "timeframe": "Weeks 2-3",
+        "items": [
+          "Create /hakkimda/, /iletisim/, KVKK page",
+          "Create /seo-danismanligi/ service page",
+          "Homepage as service hub with CTA",
+          "Unify Person + ProfessionalService schema",
+          "Full-page caching + defer JS",
+          "1200x630 OG image"
+        ]
+      },
+      {
+        "name": "Phase 3: Content & Authority",
+        "timeframe": "Month 2",
+        "items": [
+          "Merge cannibalizing posts",
+          "Prune/expand thin posts",
+          "Visible byline/dates",
+          "Fix factual errors and case-study labels",
+          "Thin category intros/noindex",
+          "Off-site entity building"
+        ]
+      },
+      {
+        "name": "Phase 4: Monitoring & Iteration",
+        "timeframe": "Ongoing",
+        "items": [
+          "Metadata/alt/typo fixes",
+          "Image lazy-load/WebP",
+          "Security headers, IndexNow",
+          "Drift baseline",
+          "Google API + Moz keys for field and link data"
+        ]
+      }
+    ]
+  },
+  "artifacts": {
+    "findings_dir": "findings/",
+    "screenshots_dir": "screenshots/"
+  }
+}
