@@ -1,0 +1,1 @@
+../../agents/seo-schema.md

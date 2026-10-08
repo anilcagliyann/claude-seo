@@ -14,6 +14,9 @@ chromium="/opt/pw-browsers/chromium"
 
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
     echo "export CLAUDE_SEO_DATA_DIR=\"${data_dir}\"" >> "${CLAUDE_ENV_FILE}"
+    # Skills and agents load from .claude/ symlinks into this checkout, so the
+    # checkout plays the plugin root for "${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo".
+    echo "export CLAUDE_PLUGIN_ROOT=\"${CLAUDE_PROJECT_DIR:-$(pwd)}\"" >> "${CLAUDE_ENV_FILE}"
     # All egress goes through the sandbox's local CONNECT proxy (127.0.0.1).
     echo "export CLAUDE_SEO_ALLOW_LOOPBACK_PROXY=1" >> "${CLAUDE_ENV_FILE}"
     # The sandbox blocks Playwright's browser CDN; reuse the preinstalled Chromium.

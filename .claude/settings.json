@@ -1,15 +1,4 @@
 {
-  "extraKnownMarketplaces": {
-    "agricidaniel-claude-seo": {
-      "source": {
-        "source": "github",
-        "repo": "anilcagliyann/claude-seo"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "claude-seo@agricidaniel-claude-seo": true
-  },
   "hooks": {
     "SessionStart": [
       {
