@@ -90,7 +90,7 @@ claude-seo/
     seo-flow.md                  # FLOW framework integration
   hooks/                           # Quality gate hooks
     hooks.json                   # PostToolUse schema validation
-  scripts/                         # 60 Python execution scripts
+  scripts/                         # 61 Python execution scripts
     google_auth.py               # Credential management (OAuth, SA, API key, 4-tier detection)
     backlinks_auth.py            # Backlink API credential management (Moz, Bing)
     moz_api.py                   # Moz Link Explorer API (DA/PA, spam, domains, anchors)
@@ -101,6 +101,7 @@ claude-seo/
     crux_history.py              # CrUX History API (25-week trends)
     gsc_query.py                 # Search Console (queries, pages, sitemaps, sites)
     gsc_inspect.py               # URL Inspection (single + batch)
+    gsc_period_report.py         # Weekly/monthly GSC comparison, brand split, movers, GA4 AI traffic
     indexing_notify.py           # Indexing API v3 (URL_UPDATED/URL_DELETED)
     ga4_report.py                # GA4 organic traffic reports
     matomo_auth.py               # Matomo credential management (extension)

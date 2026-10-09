@@ -146,6 +146,20 @@ dimension rows, not the size of every pagination request.
 > substitute for the platform's own analytics. Source:
 > developers.google.com/search/docs/monitor-debug/analyze-social-video-content
 
+
+### `/seo google gsc-report <property> weekly|monthly`
+
+Period comparison with a brand / non-brand split: weekly compares the last
+complete Monday-Sunday week with the one before; monthly compares the last two
+calendar months. Per segment: totals, the 20 biggest click losers and gainers.
+AI traffic comes from GA4 (AI Assistants channel plus AI referrer domains) and
+has no brand split because GA4 carries no query.
+
+**Script:** `"${CLAUDE_PLUGIN_ROOT}/scripts/claude-seo" run gsc_period_report.py --property <property> --brand-regex "<brand|variants>" --period weekly --ga4-property <id> --format html --output report.html`
+
+Schedule it as a Claude Routine (weekly on Wednesday so the Sunday data is
+final, monthly on the 3rd) and email the HTML via the routine's email
+notification or a connected mail tool.
 ### `/seo google inspect <url>`
 
 URL Inspection: real indexation status from Google.
