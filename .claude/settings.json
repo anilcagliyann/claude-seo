@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(scripts/claude-seo run gsc_period_report.py:*)",
+      "Bash(./scripts/claude-seo run gsc_period_report.py:*)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
