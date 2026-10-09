@@ -14,15 +14,15 @@ HTML report through the Resend API (RESEND_API_KEY). The JSON carries an email
 alert threshold or more; --summary-file puts an executive summary on top.
 
 For each segment (brand, non-brand) it reports clicks, impressions, CTR and
-position deltas, the 20 queries and 20 pages that lost the most clicks and the
-20 of each that gained the most, and the queries ranking 4-15 with the most
+position deltas, the queries that lost and gained the most clicks (20 each,
+or "top_n" from the config), and the queries ranking 4-15 with the most
 impressions. Brand queries are those matching --brand-regex (case-insensitive).
 
 An optional --config JSON file holds the brand regex and page groups, whose
 clicks are compared per segment:
 
     {"brand_regex": "acme|acmee", "exclude_query_regex": "spam|casino",
-     "alert_threshold_pct": 10,
+     "alert_threshold_pct": 10, "top_n": 10,
      "page_groups": {"Categories": {"Shoes": "-c-12\\d*$"},
                      "Page types": {"Product": "-p-", "Brand": "/brand/"}}}
 
@@ -294,14 +294,6 @@ def fetch_gsc(property_url: str, brand_regex: str, periods: dict,
             if totals.get("error"):
                 out["errors"].append(f"{key} {segment} totals: {totals['error']}")
             out[key]["totals"][segment] = totals.get("totals", {})
-            pages = query_search_analytics(
-                property_url, rng["start"], rng["end"], dimensions=["page"],
-                row_limit=QUERY_ROW_LIMIT, data_state=data_state,
-                filters=_gsc_segment_filter(brand_regex, segment),
-            )
-            if pages.get("error"):
-                out["errors"].append(f"{key} {segment} pages: {pages['error']}")
-            out[key].setdefault("pages", {})[segment] = pages.get("rows", [])
             for title, group in (page_groups or {}).items():
                 for label, regex in group.items():
                     g = query_search_analytics(
@@ -455,7 +447,7 @@ def evaluate_alert(segments: dict, threshold_pct: float) -> dict:
 def build_report(property_url: str, brand_regex: str, periods: dict,
                  gsc: dict, ai: Optional[dict], exclude_regex: Optional[str] = None,
                  organic: Optional[dict] = None, alert_threshold_pct: float = 10.0,
-                 summary: Optional[str] = None) -> dict:
+                 summary: Optional[str] = None, top_n: int = TOP_N) -> dict:
     """Assemble the final report structure from fetched data."""
     brand_re = compile_brand_regex(brand_regex)
     exclude_re = re.compile(exclude_regex, re.IGNORECASE) if exclude_regex else None
@@ -466,12 +458,8 @@ def build_report(property_url: str, brand_regex: str, periods: dict,
         segments[segment] = {
             "totals": compare_totals(gsc["current"]["totals"].get(segment, {}),
                                      gsc["previous"]["totals"].get(segment, {})),
-            **compute_movers(cur[segment], prev[segment]),
-            "pages": compute_movers(
-                {r["page"]: r for r in gsc["current"].get("pages", {}).get(segment, [])},
-                {r["page"]: r for r in gsc["previous"].get("pages", {}).get(segment, [])},
-                key_name="page"),
-            "opportunities": find_opportunities(cur[segment]),
+            **compute_movers(cur[segment], prev[segment], top_n),
+            "opportunities": find_opportunities(cur[segment], top_n),
         }
         if "yoy" in gsc:
             segments[segment]["yoy"] = compare_totals(
@@ -519,7 +507,6 @@ LABELS = {
         "metric": "Metric", "change": "Change",
         "clicks": "Clicks", "impressions": "Impressions", "ctr": "CTR %", "position": "Position",
         "decliners": "Top declining queries", "risers": "Top rising queries",
-        "page_decliners": "Top declining pages", "page_risers": "Top rising pages",
         "opportunities": "Opportunities: position 4-15, most impressions",
         "query": "Query", "page": "Page", "now": "Now", "before": "Before",
         "pos_now": "Pos. now", "pos_before": "Pos. before",
@@ -540,7 +527,6 @@ LABELS = {
         "metric": "Metrik", "change": "Değişim",
         "clicks": "Tıklama", "impressions": "Gösterim", "ctr": "TO %", "position": "Pozisyon",
         "decliners": "En çok düşen kelimeler", "risers": "En çok yükselen kelimeler",
-        "page_decliners": "En çok düşen sayfalar", "page_risers": "En çok yükselen sayfalar",
         "opportunities": "Fırsatlar: 4-15. sıradaki en çok gösterim alan kelimeler",
         "query": "Kelime", "page": "Sayfa", "now": "Şimdi", "before": "Önce",
         "pos_now": "Poz. şimdi", "pos_before": "Poz. önce",
@@ -680,15 +666,6 @@ def _blocks(report: dict, L: dict) -> list:
                         [[m["query"], _fmt(m["clicks_current"]), _fmt(m["clicks_previous"]),
                           f'{m["clicks_change"]:+d}', _fmt(m["position_current"]),
                           _fmt(m["position_previous"])] for m in seg[key]], (3,)))
-        for key in ("decliners", "risers"):
-            rows = seg.get("pages", {}).get(key, [])
-            out.append(("h3", f"{L['page_' + key]} ({len(rows)})"))
-            out.append(("table", [L["page"], L["now"], L["before"], L["change"],
-                                  L["pos_now"], L["pos_before"]],
-                        [[_short_url(m["page"]), _fmt(m["clicks_current"]),
-                          _fmt(m["clicks_previous"]), f'{m["clicks_change"]:+d}',
-                          _fmt(m["position_current"]), _fmt(m["position_previous"])]
-                         for m in rows], (3,)))
         opps = seg.get("opportunities", [])
         if opps:
             out.append(("h3", f"{L['opportunities']} ({len(opps)})"))
@@ -949,7 +926,8 @@ def main():
     ai = fetch_ga4_ai(ga4, periods) if ga4 else None
     organic = fetch_ga4_organic(ga4, periods) if ga4 else None
     report = build_report(prop, brand_regex, periods, gsc, ai,
-                          report_config.get("exclude_query_regex"), organic, threshold, summary)
+                          report_config.get("exclude_query_regex"), organic, threshold, summary,
+                          int(report_config.get("top_n", TOP_N)))
     report["subject"] = build_subject(report, args.lang)
 
     if args.email_to:

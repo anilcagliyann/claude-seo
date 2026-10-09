@@ -3,6 +3,7 @@
   "brand_regex": "idefix|ıdefix|ıdefıx|idefiks|idefiz|idedix|idefik|indefix|idefic|idefx|idefi|isefix|idefıx|ideefix|ideifx|idafix|iderix|ifefix|idrfix|odefix|idfix|defix|idef,x|idefox|ideix|ivedix|idefex|idefux|iddefix|isedix",
   "exclude_query_regex": "porno|porn|xxx|seks izle|sex izle|türkçe seks|sikiş|sikis|bahis|casino|kumar",
   "alert_threshold_pct": 10,
+  "top_n": 10,
   "page_groups": {
     "Kategoriler": {
       "Elektronik & Ev Aletleri": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-23\\d*$",

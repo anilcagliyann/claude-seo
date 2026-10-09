@@ -110,16 +110,14 @@ def test_page_groups_and_turkish_render():
     tot = {"clicks": 10, "impressions": 100, "ctr": 10.0, "position": 4.2}
     grp = {"Types": {"Product": {"brand": tot, "nonbrand": tot}}}
     gsc = {"current": {"rows": [], "totals": {"brand": tot, "nonbrand": tot},
-                       "pages": {"brand": [], "nonbrand": [
-                           {"page": "https://acme.com/x-p-1", "clicks": 3}]},
                        "groups": grp},
            "previous": {"rows": [], "totals": {"brand": tot, "nonbrand": tot},
-                        "pages": {}, "groups": grp},
+                        "groups": grp},
            "warnings": [], "errors": []}
     rep = r.build_report("sc-domain:acme.com", "acme", periods, gsc, None)
-    assert rep["segments"]["nonbrand"]["pages"]["risers"][0]["page"].endswith("x-p-1")
+    assert "pages" not in rep["segments"]["nonbrand"]
     md = r.render_markdown(rep, "tr")
-    assert "aylık" in md and "Sayfa grupları" in md and "/x-p-1" in md
+    assert "aylık" in md and "Sayfa grupları" in md and "sayfalar" not in md
     assert "brand / non-brand ayrımı yapılamaz" in md
     assert "<table" in r.render_html(rep, "tr")
 
@@ -196,3 +194,16 @@ def test_send_email_resend_posts_and_hides_key(monkeypatch):
     monkeypatch.setattr(requests, "post", lambda *a, **k: Bad())
     out = r.send_email_resend("re_secret", ["a@b.com"], "S", "h")
     assert not out["sent"] and "403" in out["error"] and "re_secret" not in out["error"]
+
+
+def test_top_n_limits_query_lists():
+    periods = r.compute_periods("weekly", date(2026, 10, 9))
+    rows = [{"query": f"q{i}", "clicks": i + 1, "impressions": 10, "position": 5.0}
+            for i in range(30)]
+    tot = {"clicks": 1, "impressions": 1, "ctr": 1.0, "position": 1.0}
+    gsc = {"current": {"rows": rows, "totals": {"brand": tot, "nonbrand": tot}},
+           "previous": {"rows": [], "totals": {"brand": tot, "nonbrand": tot}},
+           "warnings": [], "errors": []}
+    rep = r.build_report("sc-domain:acme.com", "acme", periods, gsc, None, top_n=10)
+    assert len(rep["segments"]["nonbrand"]["risers"]) == 10
+    assert len(rep["segments"]["nonbrand"]["opportunities"]) == 10
