@@ -37,7 +37,7 @@ ALLOWED_CORE_SCRIPTS = frozenset(
         "dataforseo_normalize.py", "domain_history.py", "drift_baseline.py",
         "drift_compare.py", "drift_history.py", "drift_report.py", "fetch_page.py",
         "ga4_report.py", "gbp_deprecation_lint.py", "google_auth.py",
-        "google_report.py", "gsc_inspect.py", "gsc_query.py", "indexing_notify.py",
+        "google_report.py", "gsc_inspect.py", "gsc_period_report.py", "gsc_query.py", "indexing_notify.py",
         "indexnow_submit.py", "iptc_ai_label.py", "keyword_planner.py",
         "keywordseverywhere_api.py",
         "lcp_subparts.py", "lighthouse_agentic.py", "matomo_auth.py", "matomo_report.py", "metadata_template.py",
