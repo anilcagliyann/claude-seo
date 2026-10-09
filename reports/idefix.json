@@ -1,0 +1,29 @@
+{
+  "property": "sc-domain:idefix.com",
+  "brand_regex": "idefix|ıdefix|ıdefıx|idefiks|idefiz|idedix|idefik|indefix|idefic|idefx|idefi|isefix|idefıx|ideefix|ideifx|idafix|iderix|ifefix|idrfix|odefix|idfix|defix|idef,x|idefox|ideix|ivedix|idefex|idefux|iddefix|isedix",
+  "exclude_query_regex": "porno|porn|xxx|seks izle|sex izle|bahis|casino|kumar",
+  "page_groups": {
+    "Kategoriler": {
+      "Elektronik & Ev Aletleri": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-23\\d*$",
+      "Altın & Mücevher": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-45\\d*$",
+      "Kozmetik & Kişisel Bakım": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-44\\d*$",
+      "Anne Bebek Çocuk": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-11\\d*$",
+      "Ev & Yaşam": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-22\\d*$",
+      "Hobi & Kültür": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-33\\d*$",
+      "Moda": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-55\\d*$",
+      "Spor & Outdoor": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-77\\d*$",
+      "Süpermarket": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-88\\d*$",
+      "Petshop": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-66\\d*$",
+      "Yapı Market & Bahçe": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-53\\d*$",
+      "Oto": "^https://www\\.idefix\\.com/[a-z0-9\\-]+\\-c\\-99\\d*$"
+    },
+    "Sayfa tipleri": {
+      "Tüm Kategoriler": "-c-",
+      "Ürün": "-p-",
+      "Yazar": "/yazar/",
+      "Marka": "/marka/",
+      "Satıcı": "/satici/",
+      "Yayınevi": "/yayinevi/"
+    }
+  }
+}

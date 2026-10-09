@@ -151,7 +151,10 @@ dimension rows, not the size of every pagination request.
 
 Period comparison with a brand / non-brand split: weekly compares the last
 complete Monday-Sunday week with the one before; monthly compares the last two
-calendar months. Per segment: totals, the 20 biggest click losers and gainers.
+calendar months. Per segment: totals, the 20 biggest click losers and gainers
+(queries and pages), and position 4-15 opportunities. An optional `--config`
+JSON adds page-group regexes (categories, page types) and a query exclude list;
+`--lang tr` renders Turkish labels.
 AI traffic comes from GA4 (AI Assistants channel plus AI referrer domains) and
 has no brand split because GA4 carries no query.
 

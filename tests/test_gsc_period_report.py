@@ -80,3 +80,52 @@ def test_build_and_render_report():
     assert "acme &lt;x&gt;" in html and "<x>" not in html
     assert "Non-brand" in r.render_markdown(rep)
     assert not rep["ai_performance"]["available"]
+
+
+def test_ai_source_regex_matches_whole_hosts_only():
+    import re
+    pat = re.compile(r.AI_SOURCE_REGEX)
+    assert pat.search("chatgpt.com") and pat.search("l.meta.ai")
+    assert not pat.search("peekyou.com")
+
+
+def test_opportunities_pick_position_4_to_15_by_impressions():
+    rows = {"a": {"impressions": 10, "position": 5.0}, "b": {"impressions": 99, "position": 2.0},
+            "c": {"impressions": 50, "position": 14.9}}
+    assert [o["query"] for o in r.find_opportunities(rows)] == ["c", "a"]
+
+
+def test_config_rejects_bad_page_group(tmp_path):
+    bad = tmp_path / "c.json"
+    bad.write_text('{"page_groups": {"x": {"y": ""}}}')
+    with pytest.raises(ValueError):
+        r.load_report_config(str(bad))
+    good = tmp_path / "g.json"
+    good.write_text('{"brand_regex": "acme", "page_groups": {"Types": {"Product": "-p-"}}}')
+    assert r.load_report_config(str(good))["brand_regex"] == "acme"
+
+
+def test_page_groups_and_turkish_render():
+    periods = r.compute_periods("monthly", date(2026, 10, 9))
+    tot = {"clicks": 10, "impressions": 100, "ctr": 10.0, "position": 4.2}
+    grp = {"Types": {"Product": {"brand": tot, "nonbrand": tot}}}
+    gsc = {"current": {"rows": [], "totals": {"brand": tot, "nonbrand": tot},
+                       "pages": {"brand": [], "nonbrand": [
+                           {"page": "https://acme.com/x-p-1", "clicks": 3}]},
+                       "groups": grp},
+           "previous": {"rows": [], "totals": {"brand": tot, "nonbrand": tot},
+                        "pages": {}, "groups": grp},
+           "warnings": [], "errors": []}
+    rep = r.build_report("sc-domain:acme.com", "acme", periods, gsc, None)
+    assert rep["segments"]["nonbrand"]["pages"]["risers"][0]["page"].endswith("x-p-1")
+    md = r.render_markdown(rep, "tr")
+    assert "aylık" in md and "Sayfa grupları" in md and "/x-p-1" in md
+    assert "brand / non-brand ayrımı yapılamaz" in md
+    assert "<table" in r.render_html(rep, "tr")
+
+
+def test_exclude_regex_drops_queries_from_lists():
+    import re
+    rows = [{"query": "spam deal", "clicks": 1}, {"query": "shoes", "clicks": 2}]
+    out = r.split_rows(rows, r.compile_brand_regex("acme"), re.compile("spam"))
+    assert list(out["nonbrand"]) == ["shoes"]
