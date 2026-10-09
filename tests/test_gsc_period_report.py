@@ -129,3 +129,39 @@ def test_exclude_regex_drops_queries_from_lists():
     rows = [{"query": "spam deal", "clicks": 1}, {"query": "shoes", "clicks": 2}]
     out = r.split_rows(rows, r.compile_brand_regex("acme"), re.compile("spam"))
     assert list(out["nonbrand"]) == ["shoes"]
+
+
+def test_monthly_has_yoy_same_month_last_year():
+    p = r.compute_periods("monthly", date(2026, 3, 3))
+    assert p["yoy"] == {"start": "2025-02-01", "end": "2025-02-28"}
+    assert "yoy" not in r.compute_periods("weekly", date(2026, 3, 3))
+
+
+def _report(nonbrand_prev, summary=None):
+    periods = r.compute_periods("weekly", date(2026, 10, 9))
+    cur = {"clicks": 85, "impressions": 100, "ctr": 1.0, "position": 4.0}
+    prev = dict(cur, clicks=nonbrand_prev)
+    gsc = {"current": {"rows": [], "totals": {"brand": cur, "nonbrand": cur}},
+           "previous": {"rows": [], "totals": {"brand": cur, "nonbrand": prev}},
+           "warnings": [], "errors": []}
+    organic = {"available": True,
+               "totals": r.compare_totals_metrics(
+                   {"sessions": 10, "keyEvents": 2, "transactions": 1, "purchaseRevenue": 99.5},
+                   {"sessions": 8, "keyEvents": 2, "transactions": 0, "purchaseRevenue": 0},
+                   r.ORGANIC_METRICS)}
+    return r.build_report("sc-domain:acme.com", "acme", periods, gsc, None,
+                          organic=organic, alert_threshold_pct=10, summary=summary)
+
+
+def test_alert_adds_warning_sign_to_subject():
+    hit = _report(100)  # 85 vs 100 = -15%
+    assert hit["alert"]["triggered"] and r.build_subject(hit, "tr").startswith("⚠️ ")
+    calm = _report(90)  # -5.6%
+    assert not calm["alert"]["triggered"] and not r.build_subject(calm).startswith("⚠️")
+
+
+def test_summary_and_organic_render():
+    rep = _report(90, summary="Line one.\nLine two.")
+    html = r.render_html(rep, "tr")
+    assert "Yönetici özeti" in html and "Line two." in html and "Gelir" in html
+    assert "Satış adedi" in r.render_markdown(rep, "tr")

@@ -7,6 +7,11 @@ Compares the last complete period against the one before it:
 - weekly:  last complete Monday-Sunday week vs the Monday-Sunday week before it
 - monthly: last complete calendar month vs the calendar month before it
 
+Monthly reports also compare totals with the same month last year. GA4 adds
+organic sessions, key events, purchases and revenue. The JSON carries an email
+"subject" that starts with a warning sign when non-brand clicks fell by the
+alert threshold or more; --summary-file puts an executive summary on top.
+
 For each segment (brand, non-brand) it reports clicks, impressions, CTR and
 position deltas, the 20 queries and 20 pages that lost the most clicks and the
 20 of each that gained the most, and the queries ranking 4-15 with the most
@@ -16,6 +21,7 @@ An optional --config JSON file holds the brand regex and page groups, whose
 clicks are compared per segment:
 
     {"brand_regex": "acme|acmee", "exclude_query_regex": "spam|casino",
+     "alert_threshold_pct": 10,
      "page_groups": {"Categories": {"Shoes": "-c-12\\d*$"},
                      "Page types": {"Product": "-p-", "Brand": "/brand/"}}}
 
@@ -90,12 +96,24 @@ def compute_periods(kind: str, today: Optional[date] = None) -> dict:
         prev_start = prev_end.replace(day=1)
     else:
         raise ValueError("period must be 'weekly' or 'monthly'")
-    return {
+    periods = {
         "kind": kind,
         "current": {"start": cur_start.isoformat(), "end": cur_end.isoformat()},
         "previous": {"start": prev_start.isoformat(), "end": prev_end.isoformat()},
         "fresh_data": (today - cur_end).days < GSC_LAG_DAYS,
     }
+    if kind == "monthly":
+        # Same calendar month a year earlier, to separate seasonality.
+        yoy_start = cur_start.replace(year=cur_start.year - 1)
+        next_month = (yoy_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        periods["yoy"] = {"start": yoy_start.isoformat(),
+                          "end": (next_month - timedelta(days=1)).isoformat()}
+    return periods
+
+
+def range_keys(periods: dict) -> tuple:
+    """Date-range keys present in a periods dict, in display order."""
+    return tuple(k for k in ("current", "previous", "yoy") if k in periods)
 
 
 # --------------------------------------------------------------------------- #
@@ -132,9 +150,14 @@ def _pct(cur: float, prev: float) -> Optional[float]:
 
 
 def compare_totals(cur: dict, prev: dict) -> dict:
-    """Build a metric-by-metric comparison of two totals blocks."""
+    """Build a metric-by-metric comparison of two GSC totals blocks."""
+    return compare_totals_metrics(cur, prev, ("clicks", "impressions", "ctr", "position"))
+
+
+def compare_totals_metrics(cur: dict, prev: dict, metrics: tuple) -> dict:
+    """Compare the named metrics of two totals blocks."""
     out = {}
-    for metric in ("clicks", "impressions", "ctr", "position"):
+    for metric in metrics:
         c = cur.get(metric, 0) or 0
         p = prev.get(metric, 0) or 0
         out[metric] = {
@@ -237,8 +260,22 @@ def fetch_gsc(property_url: str, brand_regex: str, periods: dict,
 
     data_state = "all" if periods["fresh_data"] else "final"
     out = {"errors": [], "warnings": []}
-    for key in ("current", "previous"):
+    for key in range_keys(periods):
         rng = periods[key]
+        if key == "yoy":
+            out[key] = {"rows": [], "totals": {}}
+            for segment in ("brand", "nonbrand"):
+                totals = query_search_analytics(
+                    property_url, rng["start"], rng["end"], dimensions=[],
+                    row_limit=1, data_state="final",
+                    filters=_gsc_segment_filter(brand_regex, segment),
+                )
+                if totals.get("error"):
+                    out["errors"].append(f"yoy {segment} totals: {totals['error']}")
+                out["warnings"].extend(w for w in totals.get("warnings", [])
+                                       if w not in out["warnings"])
+                out[key]["totals"][segment] = totals.get("totals", {})
+            continue
         rows = query_search_analytics(
             property_url, rng["start"], rng["end"], dimensions=["query"],
             row_limit=QUERY_ROW_LIMIT, data_state=data_state,
@@ -280,24 +317,62 @@ def fetch_gsc(property_url: str, brand_regex: str, periods: dict,
     return out
 
 
-def fetch_ga4_ai(property_id: str, periods: dict) -> dict:
-    """Fetch AI-assistant sessions by source for both periods from GA4."""
-    result = {"available": False, "error": None, "note": AI_BRAND_NOTE}
+def _ga4_by_range(property_id: str, periods: dict, dimension: str, dim_filter,
+                  metrics: tuple) -> tuple:
+    """Run one GA4 report over every period; return ({dim: {range: {metric}}}, error)."""
     try:
         from google.analytics.data_v1beta.types import (
-            DateRange, Dimension, Filter, FilterExpression, FilterExpressionList,
-            Metric, RunReportRequest,
+            DateRange, Dimension, Metric, RunReportRequest,
         )
         from ga4_report import _build_ga4_client, _resolve_property
     except (ImportError, SystemExit):
-        result["error"] = "google-analytics-data is not installed."
-        return result
-
+        return None, "google-analytics-data is not installed."
     client = _build_ga4_client()
     if not client:
-        result["error"] = "Could not build GA4 client. Check credentials and property access."
-        return result
+        return None, "Could not build GA4 client. Check credentials and property access."
+    keys = range_keys(periods)
+    try:
+        response = client.run_report(RunReportRequest(
+            property=_resolve_property(property_id),
+            dimensions=[Dimension(name=dimension)],
+            metrics=[Metric(name=m) for m in metrics],
+            date_ranges=[DateRange(start_date=periods[k]["start"], end_date=periods[k]["end"],
+                                   name=k) for k in keys],
+            dimension_filter=dim_filter,
+            limit=1000,
+        ))
+    except Exception as e:
+        return None, f"GA4 API error: {e}"
+    out: dict = {}
+    for row in response.rows:
+        # With several date ranges GA4 appends a dateRange dimension.
+        name = row.dimension_values[0].value
+        range_name = row.dimension_values[1].value if len(keys) > 1 else keys[0]
+        bucket = out.setdefault(name, {k: dict.fromkeys(metrics, 0.0) for k in keys})
+        for metric, value in zip(metrics, row.metric_values):
+            bucket[range_name][metric] += float(value.value or 0)
+    return out, None
 
+
+def _sum_ranges(data: dict, keys: tuple, metrics: tuple) -> dict:
+    totals = {k: dict.fromkeys(metrics, 0.0) for k in keys}
+    for bucket in data.values():
+        for k in keys:
+            for m in metrics:
+                totals[k][m] += bucket[k][m]
+    return totals
+
+
+def fetch_ga4_ai(property_id: str, periods: dict) -> dict:
+    """Fetch AI-assistant sessions by source for every period from GA4."""
+    result = {"available": False, "error": None, "note": AI_BRAND_NOTE}
+    try:
+        from google.analytics.data_v1beta.types import (
+            Filter, FilterExpression, FilterExpressionList,
+        )
+    except ImportError:
+        result["error"] = "google-analytics-data is not installed."
+        return result
     ai_filter = FilterExpression(or_group=FilterExpressionList(expressions=[
         FilterExpression(filter=Filter(
             field_name="sessionDefaultChannelGroup",
@@ -311,53 +386,75 @@ def fetch_ga4_ai(property_id: str, periods: dict) -> dict:
                 value=AI_SOURCE_REGEX, case_sensitive=False),
         )),
     ]))
-    try:
-        response = client.run_report(RunReportRequest(
-            property=_resolve_property(property_id),
-            dimensions=[Dimension(name="sessionSource")],
-            metrics=[Metric(name="sessions"), Metric(name="totalUsers"),
-                     Metric(name="engagedSessions"), Metric(name="keyEvents")],
-            date_ranges=[
-                DateRange(start_date=periods["current"]["start"],
-                          end_date=periods["current"]["end"], name="current"),
-                DateRange(start_date=periods["previous"]["start"],
-                          end_date=periods["previous"]["end"], name="previous"),
-            ],
-            dimension_filter=ai_filter,
-            limit=1000,
-        ))
-    except Exception as e:
-        result["error"] = f"GA4 API error: {e}"
+    metrics = ("sessions", "totalUsers", "engagedSessions", "keyEvents")
+    data, error = _ga4_by_range(property_id, periods, "sessionSource", ai_filter, metrics)
+    if error:
+        result["error"] = error
         return result
-
-    metrics = ("sessions", "users", "engaged_sessions", "key_events")
-    totals = {k: dict.fromkeys(metrics, 0) for k in ("current", "previous")}
-    sources: dict = {}
-    for row in response.rows:
-        # With two date ranges GA4 appends a dateRange dimension.
-        source = row.dimension_values[0].value
-        range_name = row.dimension_values[1].value
-        values = [float(v.value or 0) for v in row.metric_values]
-        bucket = sources.setdefault(source, {k: dict.fromkeys(metrics, 0) for k in totals})
-        for name, value in zip(metrics, values):
-            bucket[range_name][name] += value
-            totals[range_name][name] += value
+    keys = range_keys(periods)
+    totals = _sum_ranges(data, keys, metrics)
     result["available"] = True
-    result["totals"] = compare_totals(
-        {"clicks": totals["current"]["sessions"]}, {"clicks": totals["previous"]["sessions"]}
-    )["clicks"]
     result["detail"] = totals
+    result["totals"] = compare_totals({"clicks": totals["current"]["sessions"]},
+                                      {"clicks": totals["previous"]["sessions"]})["clicks"]
+    if "yoy" in keys:
+        result["yoy"] = compare_totals({"clicks": totals["current"]["sessions"]},
+                                       {"clicks": totals["yoy"]["sessions"]})["clicks"]
     result["sources"] = sorted(
         ({"source": s, "current": v["current"]["sessions"], "previous": v["previous"]["sessions"],
           "change": v["current"]["sessions"] - v["previous"]["sessions"]}
-         for s, v in sources.items()),
+         for s, v in data.items()),
         key=lambda r: -r["current"],
     )
     return result
 
 
+ORGANIC_METRICS = ("sessions", "keyEvents", "transactions", "purchaseRevenue")
+
+
+def fetch_ga4_organic(property_id: str, periods: dict) -> dict:
+    """Fetch organic-search sessions, key events, purchases and revenue from GA4."""
+    result = {"available": False, "error": None}
+    try:
+        from google.analytics.data_v1beta.types import Filter, FilterExpression
+    except ImportError:
+        result["error"] = "google-analytics-data is not installed."
+        return result
+    organic = FilterExpression(filter=Filter(
+        field_name="sessionDefaultChannelGroup",
+        string_filter=Filter.StringFilter(
+            match_type=Filter.StringFilter.MatchType.EXACT, value="Organic Search"),
+    ))
+    data, error = _ga4_by_range(property_id, periods, "sessionDefaultChannelGroup",
+                                organic, ORGANIC_METRICS)
+    if error:
+        result["error"] = error
+        return result
+    totals = _sum_ranges(data, range_keys(periods), ORGANIC_METRICS)
+    result["available"] = True
+    result["detail"] = totals
+    result["totals"] = compare_totals_metrics(totals["current"], totals["previous"],
+                                              ORGANIC_METRICS)
+    if "yoy" in totals:
+        result["yoy"] = compare_totals_metrics(totals["current"], totals["yoy"],
+                                               ORGANIC_METRICS)
+    return result
+
+
+def evaluate_alert(segments: dict, threshold_pct: float) -> dict:
+    """Flag the report when non-brand clicks fell by more than threshold_pct."""
+    change = segments["nonbrand"]["totals"]["clicks"]["change_pct"]
+    return {
+        "threshold_pct": threshold_pct,
+        "nonbrand_clicks_change_pct": change,
+        "triggered": change is not None and change <= -abs(threshold_pct),
+    }
+
+
 def build_report(property_url: str, brand_regex: str, periods: dict,
-                 gsc: dict, ai: Optional[dict], exclude_regex: Optional[str] = None) -> dict:
+                 gsc: dict, ai: Optional[dict], exclude_regex: Optional[str] = None,
+                 organic: Optional[dict] = None, alert_threshold_pct: float = 10.0,
+                 summary: Optional[str] = None) -> dict:
     """Assemble the final report structure from fetched data."""
     brand_re = compile_brand_regex(brand_regex)
     exclude_re = re.compile(exclude_regex, re.IGNORECASE) if exclude_regex else None
@@ -375,6 +472,10 @@ def build_report(property_url: str, brand_regex: str, periods: dict,
                 key_name="page"),
             "opportunities": find_opportunities(cur[segment]),
         }
+        if "yoy" in gsc:
+            segments[segment]["yoy"] = compare_totals(
+                gsc["current"]["totals"].get(segment, {}),
+                gsc["yoy"]["totals"].get(segment, {}))
     groups = {}
     for title, labels in gsc["current"].get("groups", {}).items():
         groups[title] = {
@@ -395,6 +496,9 @@ def build_report(property_url: str, brand_regex: str, periods: dict,
         "periods": periods,
         "segments": segments,
         "page_groups": groups,
+        "alert": evaluate_alert(segments, alert_threshold_pct),
+        "summary": summary,
+        "organic_ga4": organic or {"available": False, "error": "No --ga4-property given."},
         "ai_performance": ai or {"available": False, "error": "No --ga4-property given.",
                                  "note": AI_BRAND_NOTE},
         "warnings": warnings,
@@ -409,8 +513,8 @@ def build_report(property_url: str, brand_regex: str, periods: dict,
 LABELS = {
     "en": {
         "lang": "en", "title": "SEO {kind} report", "weekly": "weekly", "monthly": "monthly",
-        "current": "Current", "previous": "Previous", "to": "to",
-        "nonbrand": "Non-brand", "brand": "Brand",
+        "current": "Current", "previous": "Previous", "to": "to", "yoy": "Last year",
+        "yoy_pct": "YoY %", "nonbrand": "Non-brand", "brand": "Brand",
         "metric": "Metric", "change": "Change",
         "clicks": "Clicks", "impressions": "Impressions", "ctr": "CTR %", "position": "Position",
         "decliners": "Top declining queries", "risers": "Top rising queries",
@@ -420,12 +524,18 @@ LABELS = {
         "pos_now": "Pos. now", "pos_before": "Pos. before",
         "groups": "Page groups (clicks)", "group": "Group",
         "ai": "AI performance (GA4)", "ai_sessions": "AI sessions", "source": "Source",
-        "na": "Not available",
+        "organic": "Organic search business results (GA4)",
+        "sessions": "Sessions", "keyEvents": "Key events", "transactions": "Purchases",
+        "purchaseRevenue": "Revenue", "revenue": "Organic revenue",
+        "summary": "Executive summary", "alert_on": "Alert: non-brand clicks fell {pct}",
+        "alert_off": "No alert: non-brand clicks {pct} (threshold -{thr}%)",
+        "vs_prev": "vs previous", "vs_yoy": "vs last year", "na": "Not available",
+        "subject": "SEO {kind} report: {site} | Non-brand clicks {pct}",
     },
     "tr": {
         "lang": "tr", "title": "SEO {kind} raporu", "weekly": "haftalık", "monthly": "aylık",
-        "current": "Bu dönem", "previous": "Önceki dönem", "to": "-",
-        "nonbrand": "Non-brand", "brand": "Brand",
+        "current": "Bu dönem", "previous": "Önceki dönem", "to": "-", "yoy": "Geçen yıl",
+        "yoy_pct": "Yıllık %", "nonbrand": "Non-brand", "brand": "Brand",
         "metric": "Metrik", "change": "Değişim",
         "clicks": "Tıklama", "impressions": "Gösterim", "ctr": "TO %", "position": "Pozisyon",
         "decliners": "En çok düşen kelimeler", "risers": "En çok yükselen kelimeler",
@@ -435,16 +545,35 @@ LABELS = {
         "pos_now": "Poz. şimdi", "pos_before": "Poz. önce",
         "groups": "Sayfa grupları (tıklama)", "group": "Grup",
         "ai": "AI performansı (GA4)", "ai_sessions": "AI oturumları", "source": "Kaynak",
-        "na": "Veri yok",
+        "organic": "Organik arama iş sonuçları (GA4)",
+        "sessions": "Oturum", "keyEvents": "Dönüşüm (key event)", "transactions": "Satış adedi",
+        "purchaseRevenue": "Gelir", "revenue": "Organik gelir",
+        "summary": "Yönetici özeti", "alert_on": "Uyarı: Non-brand tıklama {pct} düştü",
+        "alert_off": "Uyarı yok: Non-brand tıklama {pct} (eşik -{thr}%)",
+        "vs_prev": "önceki döneme göre", "vs_yoy": "geçen yıla göre", "na": "Veri yok",
+        "subject": "SEO {kind} raporu: {site} | Non-brand tıklama {pct}",
     },
 }
 SEGMENTS = ("nonbrand", "brand")
+ACCENTS = {"nonbrand": "#2563eb", "brand": "#b8860b", "groups": "#6d28d9",
+           "organic": "#2d6a4f", "ai": "#0f766e", "summary": "#b8860b"}
+NOTES = {
+    "organic": "GA4 has no search query, so organic sessions, purchases and revenue "
+               "are one total for brand and non-brand search together.",
+}
 NOTES_TR = {
+    NOTES["organic"]: "GA4 arama kelimesi tutmadığı için organik oturum, satış ve gelir "
+                      "brand ve non-brand aramaların toplamıdır.",
     AI_BRAND_NOTE: "GA4 AI yönlendirmelerinde arama kelimesi tutmadığı için AI trafiği tek "
                    "toplam olarak verilir; brand / non-brand ayrımı yapılamaz.",
     ANON_NOTE: "Kelime satırları Google'ın gizlediği (anonim) sorguları içermez; düşen/yükselen "
                "listeleri yalnızca görünen kelimeleri kapsar. Segment toplamları filtreli "
                "toplam sorgularından gelir.",
+    "GSC impressions logging error affected impressions, CTR, and average position from "
+    "2025-05-13 through 2026-04-27; clicks were not affected.":
+        "Google'ın 13.05.2025 - 27.04.2026 arasındaki gösterim kayıt hatası gösterim, TO ve "
+        "ortalama pozisyonu etkiledi; tıklamalar etkilenmedi. Yıllık gösterim kıyasını "
+        "dikkatli okuyun.",
     FRESH_NOTE: "Dönem 3 günden kısa süre önce bitti; son günlerin Search Console verisi "
                 "henüz kesinleşmedi.",
 }
@@ -459,81 +588,146 @@ def _fmt(value, pct=False) -> str:
         return "-"
     if pct:
         return f"{value:+.1f}%"
-    if isinstance(value, float) and not value.is_integer():
+    if isinstance(value, float) and not value.is_integer() and abs(value) < 1000:
         return f"{value:,.2f}"
     return f"{int(value):,}"
+
+
+def _sgn(value) -> str:
+    """Format a change with an explicit sign."""
+    if value is None:
+        return "-"
+    if isinstance(value, float) and not value.is_integer() and abs(value) < 1000:
+        return f"{value:+,.2f}"
+    return f"{int(value):+,}"
 
 
 def _short_url(url: str) -> str:
     return re.sub(r"^https?://[^/]+", "", url) or "/"
 
 
-def _sections(report: dict, L: dict) -> list:
-    """Describe the report as (level, title, headers, rows, signed_cols) blocks.
+def _site(report: dict) -> str:
+    return re.sub(r"^(sc-domain:|https?://)", "", report["property"]).rstrip("/")
 
-    signed_cols lists column indexes holding a signed change, so renderers can
-    colour them; a negative index marks a column where lower is better.
+
+def build_subject(report: dict, lang: str = "en") -> str:
+    """Email subject line, prefixed with a warning sign when the alert fired."""
+    L = LABELS[lang]
+    pct = _fmt(report["alert"]["nonbrand_clicks_change_pct"], True)
+    subject = L["subject"].format(kind=L[report["periods"]["kind"]], site=_site(report), pct=pct)
+    return ("⚠️ " + subject) if report["alert"]["triggered"] else subject
+
+
+def _totals_table(comp: dict, yoy: Optional[dict], metrics: tuple, L: dict) -> tuple:
+    headers = [L["metric"], L["current"], L["previous"], L["change"], "%"]
+    if yoy:
+        headers += [L["yoy"], L["yoy_pct"]]
+    rows = []
+    for m in metrics:
+        t = comp[m]
+        row = [L[m], _fmt(t["current"]), _fmt(t["previous"]), _sgn(t["change"]),
+               _fmt(t["change_pct"], True)]
+        if yoy:
+            row += [_fmt(yoy[m]["previous"]), _fmt(yoy[m]["change_pct"], True)]
+        rows.append(row)
+    signed = (3, 4, 6) if yoy else (3, 4)
+    return ("table", headers, rows, signed)
+
+
+def _blocks(report: dict, L: dict) -> list:
+    """Describe the report as render-neutral blocks.
+
+    ("h2", title, accent) | ("p", text) | ("summary", text) | ("alert", text, on)
+    | ("kpis", [(label, value, pct, sub)]) | ("table", headers, rows, signed_cols).
     """
+    segs = report["segments"]
+    org = report.get("organic_ga4", {})
+    ai = report["ai_performance"]
     out = []
+    alert = report["alert"]
+    pct = _fmt(alert["nonbrand_clicks_change_pct"], True)
+    out.append(("alert", (L["alert_on"] if alert["triggered"] else L["alert_off"]).format(
+        pct=pct, thr=_fmt(alert["threshold_pct"])), alert["triggered"]))
+    if report.get("summary"):
+        out.append(("h2", L["summary"], ACCENTS["summary"]))
+        out.append(("summary", report["summary"]))
+
+    def kpi(label, comp, yoy):
+        sub = f'{L["vs_yoy"]}: {_fmt(yoy["change_pct"], True)}' if yoy else ""
+        return (label, _fmt(comp["current"]), _fmt(comp["change_pct"], True), sub)
+
+    kpis = [kpi(f'{L["nonbrand"]} {L["clicks"].lower()}', segs["nonbrand"]["totals"]["clicks"],
+                segs["nonbrand"].get("yoy", {}).get("clicks")),
+            kpi(f'{L["brand"]} {L["clicks"].lower()}', segs["brand"]["totals"]["clicks"],
+                segs["brand"].get("yoy", {}).get("clicks"))]
+    if org.get("available"):
+        kpis.append(kpi(L["revenue"], org["totals"]["purchaseRevenue"],
+                        org.get("yoy", {}).get("purchaseRevenue")))
+    if ai.get("available"):
+        kpis.append(kpi(L["ai_sessions"], ai["totals"], ai.get("yoy")))
+    out.append(("kpis", kpis))
+
     for segment in SEGMENTS:
-        seg = report["segments"][segment]
-        out.append((2, L[segment], None, None, ()))
-        out.append((3, "", [L["metric"], L["current"], L["previous"], L["change"], "%"], [
-            [L[m], _fmt(t["current"]), _fmt(t["previous"]), _fmt(t["change"]),
-             _fmt(t["change_pct"], True)]
-            for m, t in seg["totals"].items()
-        ], (3, 4)))
+        seg = segs[segment]
+        out.append(("h2", L[segment], ACCENTS[segment]))
+        out.append(_totals_table(seg["totals"], seg.get("yoy"),
+                                 ("clicks", "impressions", "ctr", "position"), L))
         for key in ("decliners", "risers"):
-            out.append((3, f"{L[key]} ({len(seg[key])})",
-                        [L["query"], L["now"], L["before"], L["change"], L["pos_now"],
-                         L["pos_before"]],
+            out.append(("h3", f"{L[key]} ({len(seg[key])})"))
+            out.append(("table", [L["query"], L["now"], L["before"], L["change"],
+                                  L["pos_now"], L["pos_before"]],
                         [[m["query"], _fmt(m["clicks_current"]), _fmt(m["clicks_previous"]),
                           f'{m["clicks_change"]:+d}', _fmt(m["position_current"]),
                           _fmt(m["position_previous"])] for m in seg[key]], (3,)))
         for key in ("decliners", "risers"):
             rows = seg.get("pages", {}).get(key, [])
-            out.append((3, f"{L['page_' + key]} ({len(rows)})",
-                        [L["page"], L["now"], L["before"], L["change"], L["pos_now"],
-                         L["pos_before"]],
+            out.append(("h3", f"{L['page_' + key]} ({len(rows)})"))
+            out.append(("table", [L["page"], L["now"], L["before"], L["change"],
+                                  L["pos_now"], L["pos_before"]],
                         [[_short_url(m["page"]), _fmt(m["clicks_current"]),
                           _fmt(m["clicks_previous"]), f'{m["clicks_change"]:+d}',
                           _fmt(m["position_current"]), _fmt(m["position_previous"])]
                          for m in rows], (3,)))
         opps = seg.get("opportunities", [])
         if opps:
-            out.append((3, f"{L['opportunities']} ({len(opps)})",
-                        [L["query"], L["impressions"], L["clicks"], L["ctr"], L["position"]],
+            out.append(("h3", f"{L['opportunities']} ({len(opps)})"))
+            out.append(("table", [L["query"], L["impressions"], L["clicks"], L["ctr"],
+                                  L["position"]],
                         [[o["query"], _fmt(o["impressions"]), _fmt(o["clicks"]),
                           _fmt(o["ctr"]), _fmt(o["position"])] for o in opps], ()))
     for title, labels in report.get("page_groups", {}).items():
-        out.append((2, f"{L['groups']}: {title}", None, None, ()))
-        out.append((3, "", [L["group"]] + [f"{L[s]} {h}" for s in SEGMENTS
-                                           for h in (L["now"], L["before"], "%")], [
+        out.append(("h2", f"{L['groups']}: {title}", ACCENTS["groups"]))
+        out.append(("table", [L["group"]] + [f"{L[s]} {h}" for s in SEGMENTS
+                                             for h in (L["now"], L["before"], "%")], [
             [label] + [v for s in SEGMENTS for v in (
                 _fmt(c[s]["clicks"]["current"]), _fmt(c[s]["clicks"]["previous"]),
                 _fmt(c[s]["clicks"]["change_pct"], True))]
             for label, c in labels.items()
         ], (3, 6)))
-    ai = report["ai_performance"]
-    out.append((2, L["ai"], None, None, ()))
+    out.append(("h2", L["organic"], ACCENTS["organic"]))
+    if org.get("available"):
+        out.append(_totals_table(org["totals"], org.get("yoy"), ORGANIC_METRICS, L))
+        out.append(("p", NOTES["organic"]))
+    else:
+        out.append(("p", f'{L["na"]}: {org.get("error")}'))
+    out.append(("h2", L["ai"], ACCENTS["ai"]))
     if ai.get("available"):
-        t = ai["totals"]
-        out.append((0, f'{L["ai_sessions"]}: {_fmt(t["current"])} / {_fmt(t["previous"])} '
-                       f'({_fmt(t["change_pct"], True)})', None, None, ()))
-        out.append((3, "", [L["source"], L["current"], L["previous"], L["change"]],
-                    [[x["source"], _fmt(x["current"]), _fmt(x["previous"]), _fmt(x["change"])]
+        out.append(("table", [L["source"], L["current"], L["previous"], L["change"]],
+                    [[x["source"], _fmt(x["current"]), _fmt(x["previous"]), _sgn(x["change"])]
                      for x in ai["sources"][:15]], (3,)))
     else:
-        out.append((0, f'{L["na"]}: {ai.get("error")}', None, None, ()))
-    out.append((0, _note(ai["note"], L["lang"]), None, None, ()))
+        out.append(("p", f'{L["na"]}: {ai.get("error")}'))
+    out.append(("p", ai["note"]))
     return out
 
 
 def _header(report: dict, L: dict) -> tuple:
     p = report["periods"]
-    title = f'{L["title"].format(kind=L[p["kind"]])}: {report["property"]}'
+    title = f'{L["title"].format(kind=L[p["kind"]])}: {_site(report)}'
     sub = (f'{L["current"]}: {p["current"]["start"]} {L["to"]} {p["current"]["end"]} | '
            f'{L["previous"]}: {p["previous"]["start"]} {L["to"]} {p["previous"]["end"]}')
+    if "yoy" in p:
+        sub += f' | {L["yoy"]}: {p["yoy"]["start"]} {L["to"]} {p["yoy"]["end"]}'
     return title, sub
 
 
@@ -542,63 +736,107 @@ def render_markdown(report: dict, lang: str = "en") -> str:
     L = LABELS[lang]
     title, sub = _header(report, L)
     lines = [f"# {title}", sub, ""]
-    for level, heading, headers, rows, _ in _sections(report, L):
-        if level == 0:
-            lines += [heading, ""]
-            continue
-        if heading:
-            lines += [f'{"#" * level} {heading}', ""]
-        if headers:
+    for block in _blocks(report, L):
+        kind = block[0]
+        if kind == "h2":
+            lines += [f"## {block[1]}", ""]
+        elif kind == "h3":
+            lines += [f"### {block[1]}", ""]
+        elif kind in ("p", "summary"):
+            lines += [_note(block[1], lang), ""]
+        elif kind == "alert":
+            lines += [("**⚠️ " if block[2] else "**") + block[1] + "**", ""]
+        elif kind == "kpis":
+            lines += [" | ".join(f"**{k[0]}**: {k[1]} ({k[2]})" for k in block[1]), ""]
+        elif kind == "table":
+            _, headers, rows, _signed = block
             lines.append("| " + " | ".join(headers) + " |")
             lines.append("|" + "---|" * len(headers))
-            for r in rows:
-                lines.append("| " + " | ".join(str(c).replace("|", "\\|") for c in r) + " |")
+            lines += ["| " + " | ".join(str(c).replace("|", "\\|") for c in r) + " |"
+                      for r in rows]
             lines.append("")
     lines += [f"- {_note(w, lang)}" for w in report["warnings"] + report["errors"]]
     return "\n".join(lines)
 
 
 def render_html(report: dict, lang: str = "en") -> str:
-    """Render the report as email-safe HTML (inline styles, tables only)."""
+    """Render the report as colourful, email-safe HTML (inline styles, tables only)."""
     L = LABELS[lang]
-    navy, green, red = "#1e3a5f", "#2d6a4f", "#c53030"
-    td = "padding:4px 8px;border-bottom:1px solid #e5e5e5;font-size:13px"
+    navy, green, red, cream = "#1e3a5f", "#2d6a4f", "#c53030", "#faf9f7"
+    font = "font-family:Arial,Helvetica,sans-serif"
+    accent = navy
 
-    def cell(value, signed, invert=False):
-        text = escape(str(value))
-        if not signed or text in ("-", "", "0"):
+    def pill(text, invert=False):
+        text = escape(str(text))
+        if text in ("-", "", "0", "+0", "+0.0%", "+0.00"):
             return text
-        # A falling position is an improvement, so its colours flip.
-        colour = red if text.startswith("-") != invert else green
-        return f'<span style="color:{colour}">{text}</span>'
+        good = text.startswith("-") == invert
+        fg, bg = (green, "#e6f4ec") if good else (red, "#fdecec")
+        return (f'<span style="background:{bg};color:{fg};padding:2px 7px;border-radius:10px;'
+                f'font-weight:bold;white-space:nowrap">{text}</span>')
 
     title, sub = _header(report, L)
-    parts = ['<div style="font-family:Arial,sans-serif;color:#222;max-width:860px">',
-             f'<h1 style="color:{navy};font-size:20px">{escape(title)}</h1>',
-             f"<p>{escape(sub)}</p>"]
-    for level, heading, headers, rows, signed in _sections(report, L):
-        if level == 0:
-            parts.append(f'<p style="font-size:13px">{escape(heading)}</p>')
-            continue
-        if heading:
-            size = 17 if level == 2 else 15
-            parts.append(f'<h{level} style="color:{navy};font-size:{size}px">'
-                         f"{escape(heading)}</h{level}>")
-        if headers:
-            head = "".join(f'<th style="{td};text-align:left;color:{navy}">{escape(h)}</th>'
-                           for h in headers)
+    parts = [
+        f'<div style="{font};background:#eef2f7;padding:16px 0">',
+        f'<table role="presentation" align="center" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="max-width:900px;background:#ffffff;border-radius:8px;overflow:hidden">',
+        f'<tr><td style="background:{navy};padding:22px 24px;color:#ffffff">'
+        f'<div style="font-size:22px;font-weight:bold">{escape(title)}</div>'
+        f'<div style="font-size:13px;color:#c9d6e8;margin-top:6px">{escape(sub)}</div>'
+        f'</td></tr><tr><td style="padding:8px 24px 24px">',
+    ]
+    for block in _blocks(report, L):
+        kind = block[0]
+        if kind == "h2":
+            accent = block[2]
+            parts.append(f'<h2 style="margin:26px 0 10px;padding:6px 12px;font-size:18px;'
+                         f'color:{accent};border-left:5px solid {accent};background:{cream}">'
+                         f"{escape(block[1])}</h2>")
+        elif kind == "h3":
+            parts.append(f'<h3 style="margin:18px 0 6px;font-size:15px;color:#333">'
+                         f"{escape(block[1])}</h3>")
+        elif kind == "p":
+            parts.append(f'<p style="font-size:12px;color:#666">{escape(_note(block[1], lang))}</p>')
+        elif kind == "summary":
+            paras = "".join(f'<p style="margin:6px 0">{escape(t)}</p>'
+                            for t in block[1].split("\n") if t.strip())
+            parts.append(f'<div style="background:#fff8e6;border-left:5px solid #b8860b;'
+                         f'padding:10px 16px;font-size:14px;line-height:1.5;color:#222">{paras}</div>')
+        elif kind == "alert":
+            bg, fg, icon = ("#fdecec", red, "⚠️ ") if block[2] else ("#e6f4ec", green, "✓ ")
+            parts.append(f'<div style="margin-top:16px;padding:10px 14px;border-radius:6px;'
+                         f'background:{bg};color:{fg};font-weight:bold;font-size:14px">'
+                         f"{icon}{escape(block[1])}</div>")
+        elif kind == "kpis":
+            width = int(100 / max(len(block[1]), 1))
+            cells = "".join(
+                f'<td width="{width}%" style="padding:6px"><div style="background:{cream};'
+                f'border:1px solid #e3e3e3;border-radius:8px;padding:12px;text-align:center">'
+                f'<div style="font-size:12px;color:#666">{escape(k[0])}</div>'
+                f'<div style="font-size:22px;font-weight:bold;color:{navy};margin:4px 0">'
+                f"{escape(k[1])}</div><div>{pill(k[2])}</div>"
+                f'<div style="font-size:11px;color:#888;margin-top:4px">{escape(k[3])}</div>'
+                f"</div></td>"
+                for k in block[1])
+            parts.append(f'<table role="presentation" width="100%" style="margin-top:12px">'
+                         f"<tr>{cells}</tr></table>")
+        elif kind == "table":
+            _, headers, rows, signed = block
+            th = "".join(f'<th style="padding:6px 8px;text-align:left;font-size:12px;'
+                         f'color:#ffffff;background:{accent}">{escape(h)}</th>' for h in headers)
             body = "".join(
-                "<tr>" + "".join(
-                    f'<td style="{td}">{cell(c, i in signed, r[0] == L["position"])}</td>'
+                f'<tr style="background:{"#ffffff" if n % 2 == 0 else "#f6f8fb"}">' + "".join(
+                    f'<td style="padding:5px 8px;font-size:13px;border-bottom:1px solid #eeeeee">'
+                    f'{pill(c, r[0] == L["position"]) if i in signed else escape(str(c))}</td>'
                     for i, c in enumerate(r)) + "</tr>"
-                for r in rows)
-            parts.append(f'<table style="border-collapse:collapse;width:100%">'
-                         f"<tr>{head}</tr>{body}</table>")
+                for n, r in enumerate(rows))
+            parts.append(f'<table width="100%" cellpadding="0" cellspacing="0" '
+                         f'style="border-collapse:collapse">{"<tr>" + th + "</tr>"}{body}</table>')
     notes = report["warnings"] + report["errors"]
     if notes:
-        parts.append('<ul style="font-size:12px;color:#666">'
+        parts.append('<ul style="font-size:11px;color:#888;margin-top:24px">'
                      + "".join(f"<li>{escape(_note(n, lang))}</li>" for n in notes) + "</ul>")
-    parts.append("</div>")
+    parts.append("</td></tr></table></div>")
     return "\n".join(parts)
 
 
@@ -622,6 +860,10 @@ def main():
     parser.add_argument("--format", choices=["json", "markdown", "html"], default="markdown")
     parser.add_argument("--json", "-j", action="store_true", help="Shortcut for --format json")
     parser.add_argument("--output", "-o", help="Write to this file instead of stdout")
+    parser.add_argument("--summary-file",
+                        help="Text file with an executive summary shown at the top")
+    parser.add_argument("--alert-threshold", type=float,
+                        help="Alert when non-brand clicks fall by this %% or more (default 10)")
     args = parser.parse_args()
 
     from google_auth import load_config
@@ -652,10 +894,23 @@ def main():
         fail("--as-of must be YYYY-MM-DD")
 
     periods = compute_periods(args.period, today)
+    summary = None
+    if args.summary_file:
+        try:
+            with open(args.summary_file, encoding="utf-8") as fh:
+                summary = fh.read().strip() or None
+        except OSError as e:
+            fail(f"Cannot read --summary-file: {e}")
+    threshold = args.alert_threshold
+    if threshold is None:
+        threshold = float(report_config.get("alert_threshold_pct", 10))
+
     gsc = fetch_gsc(prop, brand_regex, periods, report_config.get("page_groups"))
     ai = fetch_ga4_ai(ga4, periods) if ga4 else None
+    organic = fetch_ga4_organic(ga4, periods) if ga4 else None
     report = build_report(prop, brand_regex, periods, gsc, ai,
-                          report_config.get("exclude_query_regex"))
+                          report_config.get("exclude_query_regex"), organic, threshold, summary)
+    report["subject"] = build_subject(report, args.lang)
 
     if fmt == "json":
         text = json.dumps(report, indent=2, ensure_ascii=False)
@@ -666,7 +921,9 @@ def main():
     if args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
             fh.write(text)
-        print(json.dumps({"output": args.output, "errors": report["errors"]}))
+        print(json.dumps({"output": args.output, "subject": report["subject"],
+                          "alert": report["alert"]["triggered"], "errors": report["errors"]},
+                         ensure_ascii=False))
     else:
         print(text)
     if report["errors"] and not gsc["current"]["rows"]:
