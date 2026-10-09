@@ -165,3 +165,34 @@ def test_summary_and_organic_render():
     html = r.render_html(rep, "tr")
     assert "Yönetici özeti" in html and "Line two." in html and "Gelir" in html
     assert "Satış adedi" in r.render_markdown(rep, "tr")
+
+
+def test_send_email_resend_posts_and_hides_key(monkeypatch):
+    import requests
+
+    calls = {}
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"id": "abc"}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.update(url=url, headers=headers, json=json)
+        return Resp()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    out = r.send_email_resend("re_secret", ["a@b.com"], "Subj", "<p>x</p>")
+    assert out == {"sent": True, "id": "abc", "error": None}
+    assert calls["url"] == r.RESEND_ENDPOINT and calls["json"]["to"] == ["a@b.com"]
+
+    class Bad(Resp):
+        status_code = 403
+
+        def json(self):
+            return {"message": "domain not verified"}
+
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Bad())
+    out = r.send_email_resend("re_secret", ["a@b.com"], "S", "h")
+    assert not out["sent"] and "403" in out["error"] and "re_secret" not in out["error"]

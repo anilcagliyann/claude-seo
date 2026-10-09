@@ -8,7 +8,8 @@ Compares the last complete period against the one before it:
 - monthly: last complete calendar month vs the calendar month before it
 
 Monthly reports also compare totals with the same month last year. GA4 adds
-organic sessions, key events, purchases and revenue. The JSON carries an email
+organic sessions, key events, purchases and revenue. --email-to sends the
+HTML report through the Resend API (RESEND_API_KEY). The JSON carries an email
 "subject" that starts with a warning sign when non-brand clicks fell by the
 alert threshold or more; --summary-file puts an executive summary on top.
 
@@ -841,6 +842,42 @@ def render_html(report: dict, lang: str = "en") -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Email
+# --------------------------------------------------------------------------- #
+
+RESEND_ENDPOINT = "https://api.resend.com/emails"
+DEFAULT_SENDER = "SEO Raporu <onboarding@resend.dev>"
+
+
+def send_email_resend(api_key: str, to: list, subject: str, html: str,
+                      sender: str = DEFAULT_SENDER) -> dict:
+    """Send the HTML report through the Resend HTTPS API.
+
+    The endpoint is fixed (not user supplied), so no URL validation applies.
+    Returns {"sent": bool, "id": ..., "error": ...}; the key is never echoed.
+    """
+    import requests
+
+    try:
+        response = requests.post(
+            RESEND_ENDPOINT,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"from": sender, "to": to, "subject": subject, "html": html},
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        return {"sent": False, "id": None, "error": f"Resend request failed: {type(e).__name__}"}
+    if response.status_code >= 300:
+        try:
+            message = response.json().get("message", "")
+        except ValueError:
+            message = response.text[:200]
+        return {"sent": False, "id": None,
+                "error": f"Resend HTTP {response.status_code}: {message}"}
+    return {"sent": True, "id": response.json().get("id"), "error": None}
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 
@@ -862,6 +899,9 @@ def main():
     parser.add_argument("--output", "-o", help="Write to this file instead of stdout")
     parser.add_argument("--summary-file",
                         help="Text file with an executive summary shown at the top")
+    parser.add_argument("--email-to", default=os.environ.get("REPORT_EMAIL_TO"),
+                        help="Comma-separated recipients; sends the HTML report via Resend "
+                             "(needs RESEND_API_KEY; env REPORT_EMAIL_TO)")
     parser.add_argument("--alert-threshold", type=float,
                         help="Alert when non-brand clicks fall by this %% or more (default 10)")
     args = parser.parse_args()
@@ -912,6 +952,17 @@ def main():
                           report_config.get("exclude_query_regex"), organic, threshold, summary)
     report["subject"] = build_subject(report, args.lang)
 
+    if args.email_to:
+        api_key = os.environ.get("RESEND_API_KEY", "").strip()
+        recipients = [a.strip() for a in args.email_to.split(",") if a.strip()]
+        if not api_key:
+            report["email"] = {"sent": False, "error": "RESEND_API_KEY is not set."}
+        else:
+            report["email"] = send_email_resend(
+                api_key, recipients, report["subject"], render_html(report, args.lang),
+                os.environ.get("REPORT_EMAIL_FROM", DEFAULT_SENDER))
+        report["email"]["to"] = recipients
+
     if fmt == "json":
         text = json.dumps(report, indent=2, ensure_ascii=False)
     elif fmt == "html":
@@ -922,12 +973,16 @@ def main():
         with open(args.output, "w", encoding="utf-8") as fh:
             fh.write(text)
         print(json.dumps({"output": args.output, "subject": report["subject"],
+                          "email": report.get("email"),
                           "alert": report["alert"]["triggered"], "errors": report["errors"]},
                          ensure_ascii=False))
     else:
         print(text)
     if report["errors"] and not gsc["current"]["rows"]:
         sys.exit(1)
+    if report.get("email") and not report["email"]["sent"]:
+        print(f"Email not sent: {report['email']['error']}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":
